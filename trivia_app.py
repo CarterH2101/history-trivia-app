@@ -42,7 +42,7 @@ def fetch_questions_for_difficulty(difficulty_level):
         "amount": 10,  # Fetch 10 questions at a time
         "category": HISTORY_CATEGORY_ID,
         "difficulty": difficulty_str,
-        "type": "multiple" # Open Trivia DB doesn't have a 'text' type, we'll extract answer from multiple choice
+        "type": "multiple" # Ensure we get multiple choice questions
     }
     try:
         response = requests.get(OPENTDB_API_URL, params=params)
@@ -51,12 +51,19 @@ def fetch_questions_for_difficulty(difficulty_level):
         if data["response_code"] == 0: # 0 means success
             processed_questions = []
             for q in data["results"]:
-                # Decode HTML entities for question and answer
+                # Decode HTML entities for question, correct answer, and incorrect answers
                 question_text = html.unescape(q["question"])
                 correct_answer = html.unescape(q["correct_answer"])
+                incorrect_answers = [html.unescape(ans) for ans in q["incorrect_answers"]]
+
+                # Combine all answers and shuffle them
+                options = incorrect_answers + [correct_answer]
+                random.shuffle(options)
+
                 processed_questions.append({
                     "question": question_text,
-                    "answer": correct_answer,
+                    "answer": correct_answer, # Store the correct answer separately for checking
+                    "options": options,       # Store the shuffled options for display
                     "difficulty": difficulty_level,
                     "id": f"{q['category']}-{q['difficulty']}-{question_text}" # Simple unique ID
                 })
@@ -86,12 +93,7 @@ def get_next_question():
                 if fresh_questions:
                     st.session_state.all_fetched_questions[current_diff] = fresh_questions
                 else:
-                    # If newly fetched questions are all already asked, try fetching more or move on
                     st.session_state.feedback_message = "No new questions found at this difficulty. Trying to find more or moving on."
-                    # This could lead to an infinite loop if only asked questions are returned.
-                    # For simplicity, we'll just try to get one from the existing pool if available.
-                    # A more robust solution might involve a session token with Open Trivia DB.
-                    pass
             else:
                 st.session_state.feedback_message = "Could not fetch questions. Please try restarting the game."
                 st.session_state.current_question_data = None
@@ -123,6 +125,7 @@ def get_next_question():
         # Remove the question from the current pool to avoid re-asking in the same session
         st.session_state.all_fetched_questions[current_diff].remove(st.session_state.current_question_data)
 
+
 def reset_game():
     """Resets all session state variables to restart the game."""
     st.session_state.current_difficulty = 1
@@ -136,7 +139,7 @@ def reset_game():
 
 # --- Streamlit UI ---
 st.title("🌍 Dynamic History Trivia Challenge!")
-st.markdown("Test your historical knowledge! Type your answer in the box below.")
+st.markdown("Choose the correct answer from the options below.")
 
 # Start Game button for initial load
 if not st.session_state.game_started:
@@ -163,18 +166,16 @@ if st.session_state.current_question_data:
     st.header(f"Question (Difficulty {question_data['difficulty']}):")
     st.write(question_data["question"])
 
-    # Text input for user's answer
-    user_answer = st.text_input("Your Answer:", key="user_answer_input").strip() # Strip whitespace
+    # Use st.radio for multiple choice
+    # Use a unique key for the radio buttons to prevent issues on re-renders
+    selected_option = st.radio(
+        "Choose your answer:",
+        question_data["options"],
+        key=f"question_{len(st.session_state.asked_questions_ids)}"
+    )
 
     if st.button("Submit Answer"):
-        # Normalize answers for comparison (lowercase, remove extra spaces)
-        normalized_user_answer = user_answer.lower()
-        normalized_correct_answer = question_data["answer"].lower()
-
-        # Simple check: direct match or contains the correct answer as a significant part
-        # This can be improved with more sophisticated fuzzy matching if needed
-        if normalized_user_answer == normalized_correct_answer or \
-           (len(normalized_user_answer) > len(normalized_correct_answer) * 0.5 and normalized_correct_answer in normalized_user_answer):
+        if selected_option == question_data["answer"]:
             st.session_state.score += 1
             st.session_state.feedback_message = "Correct! 🎉"
             # Increase difficulty, but not beyond max difficulty (3)
@@ -199,4 +200,3 @@ st.markdown("---")
 if st.button("Restart Game (Anytime)"):
     reset_game()
     st.rerun()
-
